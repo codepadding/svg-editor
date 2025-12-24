@@ -265,6 +265,7 @@ function App() {
   const [showTreeView, setShowTreeView] = useState(false)
   const historySaveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const latestTreeRef = useRef<SvgNode | null>(null)
+  const prevSelectedIdsRef = useRef<string>('')
 
   const selectedNodes = useMemo(() => {
     if (!svgTree || selectedIds.size === 0) return []
@@ -311,6 +312,15 @@ function App() {
 
   useEffect(() => {
     // Only sync when selection changes, not when tree updates
+    const selectedIdsStr = Array.from(selectedIds).sort().join(',')
+    
+    // Skip if selection hasn't changed
+    if (prevSelectedIdsRef.current === selectedIdsStr) {
+      return
+    }
+    
+    prevSelectedIdsRef.current = selectedIdsStr
+
     if (selectedIds.size === 0) {
       // Reset to defaults when nothing is selected
       setFillColor('#0ea5e9')
@@ -327,7 +337,9 @@ function App() {
     }
 
     // Get values from first selected node (for multi-select, show first node's values)
-    const firstNode = selectedNodes[0]
+    if (!svgTree) return
+    const firstId = Array.from(selectedIds)[0]
+    const firstNode = findNode(svgTree, firstId)
     if (firstNode) {
       const fill = getAttrOrStyle(firstNode, 'fill')
       setFillColor(fill || '#0ea5e9')
@@ -368,8 +380,7 @@ function App() {
         setTextValue('')
       }
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedIds, selectedNodes])
+  }, [selectedIds, svgTree])
 
   // Cleanup timeout on unmount
   useEffect(() => {
@@ -808,6 +819,23 @@ function App() {
     [],
   )
 
+  const selectAll = useCallback(() => {
+    if (!svgTree) return
+    const getAllNodeIds = (node: SvgNode): string[] => {
+      const ids: string[] = []
+      // Don't include root SVG or text nodes
+      if (node.id !== svgTree.id && node.tag !== '#text') {
+        ids.push(node.id)
+      }
+      for (const child of node.children) {
+        ids.push(...getAllNodeIds(child))
+      }
+      return ids
+    }
+    const allIds = getAllNodeIds(svgTree)
+    setSelectedIds(new Set(allIds))
+  }, [svgTree])
+
   const deleteSelected = useCallback(() => {
     if (selectedIds.size === 0 || !svgTree) return
     // Can't delete root SVG
@@ -958,7 +986,10 @@ function App() {
         return
       }
 
-      if ((e.metaKey || e.ctrlKey) && e.key === 'z' && !e.shiftKey) {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'a') {
+        e.preventDefault()
+        selectAll()
+      } else if ((e.metaKey || e.ctrlKey) && e.key === 'z' && !e.shiftKey) {
         e.preventDefault()
         undo()
       } else if ((e.metaKey || e.ctrlKey) && (e.key === 'y' || (e.key === 'z' && e.shiftKey))) {
@@ -1130,7 +1161,7 @@ function App() {
               onWheel={handleWheel}
               style={{
                 backgroundImage: showGrid
-                  ? `linear-gradient(${canvasBg} 1px, transparent 1px), linear-gradient(90deg, ${canvasBg} 1px, transparent 1px)`
+                  ? `linear-gradient(#e2e8f0 1px, transparent 1px), linear-gradient(90deg, #e2e8f0 1px, transparent 1px)`
                   : 'none',
                 backgroundSize: '20px 20px',
                 backgroundColor: canvasBg,
@@ -1354,6 +1385,16 @@ function App() {
               <div className="flex items-center justify-between">
                 <span className="text-sm font-medium text-slate-700">Element Actions</span>
               </div>
+              <div className="mb-2">
+                <button
+                  className="w-full rounded-md bg-indigo-600 px-3 py-2 text-sm font-medium text-white shadow-sm transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
+                  onClick={selectAll}
+                  disabled={!svgTree}
+                  title="Select All (Cmd/Ctrl+A)"
+                >
+                  Select All
+                </button>
+              </div>
               <div className="grid grid-cols-2 gap-2">
                 <button
                   className="rounded-md bg-rose-600 px-3 py-2 text-sm font-medium text-white shadow-sm transition hover:bg-rose-700 disabled:cursor-not-allowed disabled:opacity-50"
@@ -1466,6 +1507,7 @@ function App() {
               </button>
             </div>
             <div className="space-y-3">
+              <ShortcutRow keys={['Cmd/Ctrl', 'A']} action="Select all elements" />
               <ShortcutRow keys={['Cmd/Ctrl', 'Z']} action="Undo" />
               <ShortcutRow keys={['Cmd/Ctrl', 'Shift', 'Z']} action="Redo" />
               <ShortcutRow keys={['Cmd/Ctrl', 'Click']} action="Toggle multi-select (add/remove)" />
