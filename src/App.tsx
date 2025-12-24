@@ -173,6 +173,7 @@ function App() {
     startY: number
     baseTransform: string
   } | null>(null)
+  const [zoom, setZoom] = useState(1)
 
   const selectedNode = useMemo(() => findNode(svgTree, selectedId), [svgTree, selectedId])
 
@@ -372,6 +373,29 @@ function App() {
     await navigator.clipboard.writeText(svgString)
   }
 
+  const handleZoomIn = () => {
+    setZoom((prev) => Math.min(prev + 0.25, 3))
+  }
+
+  const handleZoomOut = () => {
+    setZoom((prev) => Math.max(prev - 0.25, 0.25))
+  }
+
+  const handleZoomReset = () => {
+    setZoom(1)
+  }
+
+  const handleWheel = useCallback(
+    (e: React.WheelEvent) => {
+      if (e.ctrlKey || e.metaKey) {
+        e.preventDefault()
+        const delta = e.deltaY > 0 ? -0.1 : 0.1
+        setZoom((prev) => Math.min(Math.max(prev + delta, 0.25), 3))
+      }
+    },
+    [],
+  )
+
   return (
     <div className="min-h-screen">
       <div className="mx-auto max-w-7xl px-6 py-8">
@@ -405,24 +429,55 @@ function App() {
           <section className="glass scroll-slim lg:col-span-8 rounded-2xl p-4 shadow-soft">
             <div className="flex items-center justify-between">
               <h2 className="text-base font-semibold text-slate-800">Canvas</h2>
-              {error ? (
-                <span className="text-xs font-medium text-rose-600">{error}</span>
-              ) : selectedNode ? (
-                <span className="text-xs text-slate-500">
-                  Selected: <strong className="text-slate-700">{selectedNode.tag}</strong>
-                </span>
-              ) : (
-                <span className="text-xs text-slate-400">No selection</span>
-              )}
+              <div className="flex items-center gap-2">
+                <div className="flex items-center gap-1 rounded-lg border border-slate-200 bg-white">
+                  <button
+                    onClick={handleZoomOut}
+                    disabled={zoom <= 0.25}
+                    className="rounded-l-lg px-2 py-1 text-sm font-medium text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
+                    title="Zoom out"
+                  >
+                    −
+                  </button>
+                  <button
+                    onClick={handleZoomReset}
+                    className="px-3 py-1 text-xs font-medium text-slate-600 hover:bg-slate-100"
+                    title="Reset zoom"
+                  >
+                    {Math.round(zoom * 100)}%
+                  </button>
+                  <button
+                    onClick={handleZoomIn}
+                    disabled={zoom >= 3}
+                    className="rounded-r-lg px-2 py-1 text-sm font-medium text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
+                    title="Zoom in"
+                  >
+                    +
+                  </button>
+                </div>
+                {error ? (
+                  <span className="text-xs font-medium text-rose-600">{error}</span>
+                ) : selectedNode ? (
+                  <span className="text-xs text-slate-500">
+                    Selected: <strong className="text-slate-700">{selectedNode.tag}</strong>
+                  </span>
+                ) : (
+                  <span className="text-xs text-slate-400">No selection</span>
+                )}
+              </div>
             </div>
             <div
               className="mt-3 overflow-auto rounded-xl border border-slate-200 bg-white p-4"
               onMouseMove={handlePointerMove}
               onMouseUp={handlePointerUp}
               onMouseLeave={handlePointerUp}
+              onWheel={handleWheel}
             >
               {svgTree ? (
-                <div className="flex justify-center">
+                <div
+                  className="flex justify-center transition-transform duration-200 ease-in-out"
+                  style={{ transform: `scale(${zoom})`, transformOrigin: 'center' }}
+                >
                   {renderNode(svgTree)}
                 </div>
               ) : (
