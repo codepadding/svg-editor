@@ -256,6 +256,8 @@ function App() {
     startY: number
     baseTransform: string
   } | null>(null)
+  const hasDraggedRef = useRef(false)
+  const mouseDownPosRef = useRef<{ x: number; y: number } | null>(null)
   const [zoom, setZoom] = useState(1)
   const [showGrid, setShowGrid] = useState(false)
   const [canvasBg, setCanvasBg] = useState('#ffffff')
@@ -428,6 +430,23 @@ function App() {
     // Don't allow selecting the root SVG element
     if (!svgTree || nodeId === svgTree.id) return
     
+    // Check if this was a drag by comparing mouse positions
+    let wasDragging = hasDraggedRef.current
+    if (mouseDownPosRef.current) {
+      const dx = e.clientX - mouseDownPosRef.current.x
+      const dy = e.clientY - mouseDownPosRef.current.y
+      const distance = Math.sqrt(dx * dx + dy * dy)
+      if (distance > 5) {
+        wasDragging = true
+      }
+      mouseDownPosRef.current = null
+    }
+    hasDraggedRef.current = false // Reset flag
+    
+    if (wasDragging) {
+      return // Don't toggle if user was dragging
+    }
+    
     // Ensure we're selecting the actual clicked element, not a parent
     const target = e.currentTarget as HTMLElement
     const clickedId = target.getAttribute('data-id')
@@ -455,8 +474,16 @@ function App() {
         return next
       })
     } else {
-      // Single select: replace selection
-      setSelectedIds(new Set([nodeId]))
+      // Toggle selection on normal click (so users can toggle after selecting all)
+      setSelectedIds((prev) => {
+        const next = new Set(prev)
+        if (next.has(nodeId)) {
+          next.delete(nodeId)
+        } else {
+          next.add(nodeId)
+        }
+        return next
+      })
     }
   }, [svgTree])
 
@@ -494,13 +521,18 @@ function App() {
       onMouseDown: (e: React.MouseEvent) => {
         if (node.tag === 'svg') return
         e.stopPropagation()
-        // Initialize drag for the clicked element
+        // Track mouse down position to detect if it was a drag in onClick
+        hasDraggedRef.current = false
+        mouseDownPosRef.current = { x: e.clientX, y: e.clientY }
+        // Only initialize drag state if element is already selected
+        if (isSelected) {
         setDragState({
           id: node.id,
           startX: e.clientX,
           startY: e.clientY,
           baseTransform: node.attrs.transform ?? '',
         })
+        }
       },
       style: {
         ...mergedStyle,
@@ -750,26 +782,54 @@ function App() {
   const handlePointerMove = useCallback(
     (e: React.MouseEvent) => {
       if (!dragState) return
-      // Use functional update to get latest tree state
-      setSvgTree((currentTree) => {
-        if (!currentTree) return currentTree
-        const dx = (e.clientX - dragState.startX) / zoom
-        const dy = (e.clientY - dragState.startY) / zoom
-        const transform = `${dragState.baseTransform ? `${dragState.baseTransform} ` : ''}translate(${dx} ${dy})`
-        const next = updateNode(currentTree, dragState.id, (node) => {
+      // Check if mouse has moved significantly (more than 5px) to consider it a drag
+        const dx = e.clientX - dragState.startX
+        const dy = e.clientY - dragState.startY
+      const distance = Math.sqrt(dx * dx + dy * dy)
+      
+      if (distance > 5) {
+        hasDraggedRef.current = true
+      }
+      
+      // Only update transform if we've actually dragged
+      if (hasDraggedRef.current) {
+        // Use functional update to get latest tree state
+        setSvgTree((currentTree) => {
+          if (!currentTree) return currentTree
+          const scaledDx = dx / zoom
+          const scaledDy = dy / zoom
+          const transform = `${dragState.baseTransform ? `${dragState.baseTransform} ` : ''}translate(${scaledDx} ${scaledDy})`
+          const next = updateNode(currentTree, dragState.id, (node) => {
           node.attrs.transform = transform
         })
-        latestTreeRef.current = next
-        return next
+          latestTreeRef.current = next
+          return next
       })
+      }
     },
     [dragState, zoom],
   )
 
   const handlePointerUp = useCallback(() => {
-    if (dragState && latestTreeRef.current) {
-      updateTreeWithHistory(latestTreeRef.current)
+    if (dragState) {
+      if (hasDraggedRef.current && latestTreeRef.current) {
+        // Only update history if actual dragging occurred
+        updateTreeWithHistory(latestTreeRef.current)
+      } else {
+        // If we didn't actually drag, reset the tree to prevent visual glitches
+        // The drag state was initialized but no movement occurred
+        setSvgTree((currentTree) => {
+          if (!currentTree || !dragState) return currentTree
+          // Reset transform to original
+          const next = updateNode(currentTree, dragState.id, (node) => {
+            node.attrs.transform = dragState.baseTransform
+          })
+          latestTreeRef.current = next
+          return next
+        })
+      }
       setDragState(null)
+      // Note: Don't reset hasDraggedRef here - let onClick check it first
     }
   }, [dragState, updateTreeWithHistory])
 
@@ -819,12 +879,12 @@ function App() {
     [],
   )
 
-  const selectAll = useCallback(() => {
-    if (!svgTree) return
+  // Helper to get all selectable node IDs
+  const getAllSelectableIds = useCallback((tree: SvgNode): string[] => {
     const getAllNodeIds = (node: SvgNode): string[] => {
       const ids: string[] = []
       // Don't include root SVG or text nodes
-      if (node.id !== svgTree.id && node.tag !== '#text') {
+      if (node.id !== tree.id && node.tag !== '#text') {
         ids.push(node.id)
       }
       for (const child of node.children) {
@@ -832,9 +892,24 @@ function App() {
       }
       return ids
     }
-    const allIds = getAllNodeIds(svgTree)
-    setSelectedIds(new Set(allIds))
-  }, [svgTree])
+    return getAllNodeIds(tree)
+  }, [])
+
+  // Check if all elements are selected
+  const areAllSelected = useMemo(() => {
+    if (!svgTree || selectedIds.size === 0) return false
+    const allIds = getAllSelectableIds(svgTree)
+    return allIds.length > 0 && allIds.every(id => selectedIds.has(id))
+  }, [svgTree, selectedIds, getAllSelectableIds])
+
+  const selectAll = useCallback(() => {
+    if (!svgTree) return
+    const allIds = getAllSelectableIds(svgTree)
+    const allIdsSet = new Set(allIds)
+    
+    // Toggle: if all are selected, deselect all; otherwise, select all
+    setSelectedIds(areAllSelected ? new Set<string>() : allIdsSet)
+  }, [svgTree, areAllSelected, getAllSelectableIds])
 
   const deleteSelected = useCallback(() => {
     if (selectedIds.size === 0 || !svgTree) return
@@ -1015,7 +1090,7 @@ function App() {
 
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [undo, redo, deleteSelected, duplicateSelected, groupSelected, ungroupSelected])
+  }, [selectAll, undo, redo, deleteSelected, duplicateSelected, groupSelected, ungroupSelected])
 
   return (
     <div className="min-h-screen">
@@ -1044,6 +1119,14 @@ function App() {
               title="Redo (Cmd/Ctrl+Shift+Z)"
             >
               ↷ Redo
+            </button>
+            <button
+              className="rounded-lg bg-indigo-600 px-3 py-2 text-sm font-medium text-white shadow-sm transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
+              onClick={selectAll}
+              disabled={!svgTree}
+              title={areAllSelected ? "Deselect All (Cmd/Ctrl+A)" : "Select All Elements (Cmd/Ctrl+A)"}
+            >
+              {areAllSelected ? '✗ Deselect All' : '✓ Select All'}
             </button>
             <button
               className="rounded-lg bg-white px-3 py-2 text-sm font-medium text-slate-700 shadow-sm ring-1 ring-slate-200 transition hover:shadow disabled:opacity-50"
@@ -1390,9 +1473,9 @@ function App() {
                   className="w-full rounded-md bg-indigo-600 px-3 py-2 text-sm font-medium text-white shadow-sm transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
                   onClick={selectAll}
                   disabled={!svgTree}
-                  title="Select All (Cmd/Ctrl+A)"
+                  title={areAllSelected ? "Deselect All (Cmd/Ctrl+A)" : "Select All (Cmd/Ctrl+A)"}
                 >
-                  Select All
+                  {areAllSelected ? '✗ Deselect All' : '✓ Select All'}
                 </button>
               </div>
               <div className="grid grid-cols-2 gap-2">
