@@ -455,8 +455,8 @@ function App() {
       nodeId = clickedId
     }
     
-    if (e.ctrlKey || e.metaKey) {
-      // Multi-select: toggle selection (Ctrl/Cmd+Click)
+    if (e.shiftKey) {
+      // Multi-select: toggle selection (Shift+Click) - add if not selected, remove if already selected
       setSelectedIds((prev) => {
         const next = new Set(prev)
         if (next.has(nodeId)) {
@@ -466,24 +466,20 @@ function App() {
         }
         return next
       })
-    } else if (e.shiftKey) {
-      // Multi-select: add to selection (Shift+Click)
+    } else if (e.ctrlKey || e.metaKey) {
+      // Multi-select: toggle selection (Ctrl/Cmd+Click) - add/remove from selection
       setSelectedIds((prev) => {
         const next = new Set(prev)
-        next.add(nodeId)
+        if (next.has(nodeId)) {
+          next.delete(nodeId)
+        } else {
+          next.add(nodeId)
+        }
         return next
       })
     } else {
-      // Toggle selection on normal click (so users can toggle after selecting all)
-      setSelectedIds((prev) => {
-        const next = new Set(prev)
-        if (next.has(nodeId)) {
-          next.delete(nodeId)
-        } else {
-          next.add(nodeId)
-        }
-        return next
-      })
+      // Normal click: replace selection (single select) - deselect all previous, select only this one
+      setSelectedIds(new Set([nodeId]))
     }
   }, [svgTree])
 
