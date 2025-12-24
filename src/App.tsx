@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useState, useRef } from 'react'
 import DOMPurify from 'dompurify'
 import { HexColorPicker } from 'react-colorful'
 import './App.css'
@@ -127,6 +127,15 @@ const updateNode = (node: SvgNode, id: string, mutate: (target: SvgNode) => void
   return next
 }
 
+const updateMultipleNodes = (node: SvgNode, ids: Set<string>, mutate: (target: SvgNode) => void): SvgNode => {
+  const next = cloneNode(node)
+  if (ids.has(node.id)) {
+    mutate(next)
+  }
+  next.children = next.children.map((child) => updateMultipleNodes(child, ids, mutate))
+  return next
+}
+
 const findNode = (node: SvgNode | null, id: string | null): SvgNode | null => {
   if (!node || !id) return null
   if (node.id === id) return node
@@ -165,6 +174,15 @@ const removeNode = (node: SvgNode, id: string): SvgNode | null => {
   if (node.id === id) return null
   const next = cloneNode(node)
   next.children = next.children.filter((child) => child.id !== id).map((child) => removeNode(child, id)!)
+  return next
+}
+
+const removeMultipleNodes = (node: SvgNode, ids: Set<string>): SvgNode | null => {
+  if (ids.has(node.id)) return null
+  const next = cloneNode(node)
+  next.children = next.children
+    .filter((child) => !ids.has(child.id))
+    .map((child) => removeMultipleNodes(child, ids)!)
   return next
 }
 
@@ -218,7 +236,7 @@ const getAllNodes = (node: SvgNode): SvgNode[] => {
 function App() {
   const [rawSvg, setRawSvg] = useState('')
   const [svgTree, setSvgTree] = useState<SvgNode | null>(null)
-  const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [error, setError] = useState<string | null>(null)
   const [fillColor, setFillColor] = useState('#0ea5e9')
   const [textValue, setTextValue] = useState('')
@@ -245,8 +263,15 @@ function App() {
   const [historyIndex, setHistoryIndex] = useState(-1)
   const [showShortcuts, setShowShortcuts] = useState(false)
   const [showTreeView, setShowTreeView] = useState(false)
+  const historySaveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const latestTreeRef = useRef<SvgNode | null>(null)
 
-  const selectedNode = useMemo(() => findNode(svgTree, selectedId), [svgTree, selectedId])
+  const selectedNodes = useMemo(() => {
+    if (!svgTree || selectedIds.size === 0) return []
+    return Array.from(selectedIds)
+      .map((id) => findNode(svgTree, id))
+      .filter((node): node is SvgNode => node !== null)
+  }, [svgTree, selectedIds])
 
   // History management
   const saveToHistory = useCallback((tree: SvgNode | null) => {
@@ -261,13 +286,16 @@ function App() {
     if (!newTree) return
     saveToHistory(newTree)
     setSvgTree(newTree)
+    latestTreeRef.current = newTree
   }, [saveToHistory])
 
   const undo = useCallback(() => {
     if (historyIndex > 0) {
       const newIndex = historyIndex - 1
       setHistoryIndex(newIndex)
-      setSvgTree(cloneNode(history[newIndex]))
+      const tree = cloneNode(history[newIndex])
+      setSvgTree(tree)
+      latestTreeRef.current = tree
     }
   }, [history, historyIndex])
 
@@ -275,13 +303,15 @@ function App() {
     if (historyIndex < history.length - 1) {
       const newIndex = historyIndex + 1
       setHistoryIndex(newIndex)
-      setSvgTree(cloneNode(history[newIndex]))
+      const tree = cloneNode(history[newIndex])
+      setSvgTree(tree)
+      latestTreeRef.current = tree
     }
   }, [history, historyIndex])
 
   useEffect(() => {
-    // Only sync when selection ID changes, not when tree updates
-    if (!selectedId) {
+    // Only sync when selection changes, not when tree updates
+    if (selectedIds.size === 0) {
       // Reset to defaults when nothing is selected
       setFillColor('#0ea5e9')
       setStrokeColor('#0f172a')
@@ -296,33 +326,34 @@ function App() {
       return
     }
 
-    const node = findNode(svgTree, selectedId)
-    if (node) {
-      const fill = getAttrOrStyle(node, 'fill')
+    // Get values from first selected node (for multi-select, show first node's values)
+    const firstNode = selectedNodes[0]
+    if (firstNode) {
+      const fill = getAttrOrStyle(firstNode, 'fill')
       setFillColor(fill || '#0ea5e9')
 
-      const stroke = getAttrOrStyle(node, 'stroke')
+      const stroke = getAttrOrStyle(firstNode, 'stroke')
       setStrokeColor(stroke || '#0f172a')
 
-      const width = getAttrOrStyle(node, 'stroke-width')
+      const width = getAttrOrStyle(firstNode, 'stroke-width')
       setStrokeWidth(width || '1')
 
-      const dash = getAttrOrStyle(node, 'stroke-dasharray')
+      const dash = getAttrOrStyle(firstNode, 'stroke-dasharray')
       setStrokeDash(dash || '')
 
-      const strokeOpacityValue = getAttrOrStyle(node, 'stroke-opacity')
+      const strokeOpacityValue = getAttrOrStyle(firstNode, 'stroke-opacity')
       setStrokeOpacity(strokeOpacityValue || '1')
 
-      const linecap = getAttrOrStyle(node, 'stroke-linecap')
+      const linecap = getAttrOrStyle(firstNode, 'stroke-linecap')
       setStrokeLinecap(linecap || 'round')
 
-      const linejoin = getAttrOrStyle(node, 'stroke-linejoin')
+      const linejoin = getAttrOrStyle(firstNode, 'stroke-linejoin')
       setStrokeLinejoin(linejoin || 'round')
 
-      const opacityValue = getAttrOrStyle(node, 'opacity')
+      const opacityValue = getAttrOrStyle(firstNode, 'opacity')
       setOpacity(opacityValue || '1')
 
-      const transform = node.attrs.transform || ''
+      const transform = firstNode.attrs.transform || ''
       const parsed = parseTransform(transform)
       if (parsed.rotate !== undefined) {
         setRotation(parsed.rotate)
@@ -330,7 +361,7 @@ function App() {
         setRotation(0)
       }
 
-      const text = getFirstText(node)
+      const text = getFirstText(firstNode)
       if (text !== undefined) {
         setTextValue(text)
       } else {
@@ -338,7 +369,16 @@ function App() {
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedId])
+  }, [selectedIds, selectedNodes])
+
+  // Cleanup timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (historySaveTimeoutRef.current) {
+        clearTimeout(historySaveTimeoutRef.current)
+      }
+    }
+  }, [])
 
   const handleSvgInput = useCallback((value: string) => {
     setRawSvg(value)
@@ -346,7 +386,8 @@ function App() {
     if (!tree) {
       setError('No <svg> tag found. Paste a valid SVG.')
       setSvgTree(null)
-      setSelectedId(null)
+      latestTreeRef.current = null
+      setSelectedIds(new Set())
       setHistory([])
       setHistoryIndex(-1)
       return
@@ -356,8 +397,9 @@ function App() {
     setHistory(initialHistory)
     setHistoryIndex(0)
     setSvgTree(tree)
+    latestTreeRef.current = tree
     setRawSvg(clean)
-    setSelectedId(tree.id)
+    setSelectedIds(new Set([tree.id]))
   }, [])
 
   const handleFile = useCallback((file: File) => {
@@ -369,19 +411,55 @@ function App() {
     reader.readAsText(file)
   }, [handleSvgInput])
 
+  const handleNodeClick = useCallback((nodeId: string, e: React.MouseEvent) => {
+    e.stopPropagation()
+    
+    // Don't allow selecting the root SVG element
+    if (!svgTree || nodeId === svgTree.id) return
+    
+    // Ensure we're selecting the actual clicked element, not a parent
+    const target = e.currentTarget as HTMLElement
+    const clickedId = target.getAttribute('data-id')
+    if (clickedId && clickedId !== nodeId) {
+      // If the clicked element's ID doesn't match, use the clicked ID
+      nodeId = clickedId
+    }
+    
+    if (e.ctrlKey || e.metaKey) {
+      // Multi-select: toggle selection (Ctrl/Cmd+Click)
+      setSelectedIds((prev) => {
+        const next = new Set(prev)
+        if (next.has(nodeId)) {
+          next.delete(nodeId)
+        } else {
+          next.add(nodeId)
+        }
+        return next
+      })
+    } else if (e.shiftKey) {
+      // Multi-select: add to selection (Shift+Click)
+      setSelectedIds((prev) => {
+        const next = new Set(prev)
+        next.add(nodeId)
+        return next
+      })
+    } else {
+      // Single select: replace selection
+      setSelectedIds(new Set([nodeId]))
+    }
+  }, [svgTree])
+
   const renderNode = (node: SvgNode): React.ReactNode => {
     if (node.tag === '#text') {
       return node.text
     }
 
     const { tag, attrs, children } = node
-    const isSelected = node.id === selectedId
+    const isSelected = selectedIds.has(node.id)
     const baseStyle =
       typeof attrs.style === 'string' ? styleStringToObject(attrs.style) : attrs.style
     const mergedStyle: React.CSSProperties = {
       ...(baseStyle ?? {}),
-      outline: isSelected ? '2px solid #0ea5e9' : undefined,
-      outlineOffset: 2,
       cursor: 'pointer',
       ...(node.tag === 'svg'
         ? {
@@ -397,14 +475,15 @@ function App() {
       ...restAttrs,
       key: node.id,
       'data-id': node.id,
+      'data-selected': isSelected ? 'true' : undefined,
       onClick: (e: React.MouseEvent) => {
         e.stopPropagation()
-        setSelectedId(node.id)
+        handleNodeClick(node.id, e)
       },
       onMouseDown: (e: React.MouseEvent) => {
         if (node.tag === 'svg') return
         e.stopPropagation()
-        setSelectedId(node.id)
+        // Initialize drag for the clicked element
         setDragState({
           id: node.id,
           startX: e.clientX,
@@ -420,9 +499,218 @@ function App() {
     return React.createElement(tag, mergedAttrs, children.map(renderNode))
   }
 
+  // Component to render selection handles and bounding boxes
+  const SelectionOverlay = () => {
+    const [bboxes, setBboxes] = useState<Map<string, DOMRect>>(new Map())
+
+    useEffect(() => {
+      if (selectedIds.size === 0) {
+        setBboxes(new Map())
+        return
+      }
+
+      const updateBboxes = () => {
+        const newBboxes = new Map<string, DOMRect>()
+        const canvasContainer = document.querySelector('[class*="overflow-auto"]') as HTMLElement
+        if (!canvasContainer) return
+
+        selectedIds.forEach((id) => {
+          const element = document.querySelector(`[data-id="${id}"]`) as any
+          if (element && element.tagName !== 'svg') {
+            try {
+              // Get the element's bounding rect (already includes zoom transform)
+              const elementRect = element.getBoundingClientRect()
+              // Get the canvas container's bounding rect
+              const containerRect = canvasContainer.getBoundingClientRect()
+
+              // Calculate position relative to container, accounting for scroll
+              const scrollLeft = canvasContainer.scrollLeft
+              const scrollTop = canvasContainer.scrollTop
+
+              // Position relative to container viewport (accounting for scroll)
+              const x = elementRect.left - containerRect.left + scrollLeft
+              const y = elementRect.top - containerRect.top + scrollTop
+              const width = elementRect.width
+              const height = elementRect.height
+
+              newBboxes.set(id, new DOMRect(x, y, width, height))
+            } catch (e) {
+              // Ignore errors
+            }
+          }
+        })
+        setBboxes(newBboxes)
+      }
+
+      // Small delay to ensure DOM is updated
+      const timeout = setTimeout(updateBboxes, 0)
+      return () => clearTimeout(timeout)
+    }, [selectedIds, svgTree, zoom])
+
+    if (selectedIds.size === 0 || !svgTree) return null
+
+    return (
+      <div
+        style={{
+          position: 'absolute',
+          top: 0,
+          left: 0,
+          width: '100%',
+          height: '100%',
+          pointerEvents: 'none',
+          overflow: 'visible',
+        }}
+      >
+        {Array.from(selectedIds).map((id) => {
+          const bbox = bboxes.get(id)
+          if (!bbox) return null
+
+          const handleSize = 8
+          const handles = [
+            { x: bbox.left, y: bbox.top },
+            { x: bbox.left + bbox.width / 2, y: bbox.top },
+            { x: bbox.left + bbox.width, y: bbox.top },
+            { x: bbox.left + bbox.width, y: bbox.top + bbox.height / 2 },
+            { x: bbox.left + bbox.width, y: bbox.top + bbox.height },
+            { x: bbox.left + bbox.width / 2, y: bbox.top + bbox.height },
+            { x: bbox.left, y: bbox.top + bbox.height },
+            { x: bbox.left, y: bbox.top + bbox.height / 2 },
+          ]
+
+          return (
+            <React.Fragment key={id}>
+              {/* Bounding box */}
+              <div
+                style={{
+                  position: 'absolute',
+                  left: `${bbox.left}px`,
+                  top: `${bbox.top}px`,
+                  width: `${bbox.width}px`,
+                  height: `${bbox.height}px`,
+                  border: '1px dashed #3b82f6',
+                  boxSizing: 'border-box',
+                  pointerEvents: 'none',
+                }}
+              />
+              {/* Control handles */}
+              {handles.map((handle, idx) => (
+                <div
+                  key={idx}
+                  style={{
+                    position: 'absolute',
+                    left: `${handle.x - handleSize / 2}px`,
+                    top: `${handle.y - handleSize / 2}px`,
+                    width: `${handleSize}px`,
+                    height: `${handleSize}px`,
+                    backgroundColor: '#3b82f6',
+                    border: '1px solid white',
+                    boxSizing: 'border-box',
+                    pointerEvents: 'none',
+                  }}
+                />
+              ))}
+              {/* Vertex points for polygons */}
+              {(() => {
+                const node = findNode(svgTree, id)
+                if (!node || (node.tag !== 'polygon' && node.tag !== 'polyline')) return null
+
+                if (node.attrs.points) {
+                  const svgEl = document.querySelector('svg[data-id="' + svgTree.id + '"]') as SVGSVGElement
+                  if (!svgEl) return null
+
+                  try {
+                    const points = node.attrs.points
+                      .trim()
+                      .split(/[\s,]+/)
+                      .map(Number)
+                      .filter((n) => !isNaN(n))
+
+                    const element = document.querySelector(`[data-id="${id}"]`) as any
+                    if (!element) return null
+
+                    return (
+                      <>
+                        {Array.from({ length: points.length / 2 }, (_, i) => {
+                          const x = points[i * 2]
+                          const y = points[i * 2 + 1]
+                          const pt = svgEl.createSVGPoint()
+                          pt.x = x
+                          pt.y = y
+                          const screenCTM = element.getScreenCTM ? element.getScreenCTM() : null
+                          if (!screenCTM) return null
+                          const svgRect = svgEl.getBoundingClientRect()
+                          const screenPt = pt.matrixTransform(screenCTM)
+
+                          return (
+                            <div
+                              key={`vertex-${i}`}
+                              style={{
+                                position: 'absolute',
+                                left: screenPt.x - svgRect.left - 4,
+                                top: screenPt.y - svgRect.top - 4,
+                                width: 8,
+                                height: 8,
+                                borderRadius: '50%',
+                                backgroundColor: '#ef4444',
+                                border: '1px solid white',
+                                boxSizing: 'border-box',
+                              }}
+                            />
+                          )
+                        })}
+                      </>
+                    )
+                  } catch (e) {
+                    return null
+                  }
+                }
+                return null
+              })()}
+            </React.Fragment>
+          )
+        })}
+      </div>
+    )
+  }
+
+  // Update attribute without immediately saving to history (for rapid changes like color picker)
+  const updateAttributeWithoutHistory = useCallback((key: string, value: string) => {
+    if (selectedIds.size === 0) return
+    
+    // Use functional update to always get the latest tree state
+    setSvgTree((currentTree) => {
+      if (!currentTree) return currentTree
+      const next = updateMultipleNodes(currentTree, selectedIds, (node) => {
+      if (key === 'fill' || key === 'stroke') {
+        const styleValue = applyStyleValue(node.attrs.style, key, value || undefined)
+        if (styleValue) node.attrs.style = styleValue
+        else delete node.attrs.style
+      }
+      if (value) node.attrs[key] = value
+      else delete node.attrs[key]
+    })
+      
+      // Store latest tree in ref for history save
+      latestTreeRef.current = next
+      
+      // Debounce history save - clear existing timeout and set a new one
+      if (historySaveTimeoutRef.current) {
+        clearTimeout(historySaveTimeoutRef.current)
+      }
+      historySaveTimeoutRef.current = setTimeout(() => {
+        const treeToSave = latestTreeRef.current
+        if (treeToSave) {
+          saveToHistory(treeToSave)
+        }
+      }, 500) // Save to history 500ms after user stops changing
+      
+      return next
+    })
+  }, [selectedIds, saveToHistory])
+
   const updateAttribute = useCallback((key: string, value: string) => {
-    if (!selectedId || !svgTree) return
-    const next = updateNode(svgTree, selectedId, (node) => {
+    if (selectedIds.size === 0 || !svgTree) return
+    const next = updateMultipleNodes(svgTree, selectedIds, (node) => {
       if (key === 'fill' || key === 'stroke') {
         const styleValue = applyStyleValue(node.attrs.style, key, value || undefined)
         if (styleValue) node.attrs.style = styleValue
@@ -432,11 +720,11 @@ function App() {
       else delete node.attrs[key]
     })
     updateTreeWithHistory(next)
-  }, [selectedId, svgTree, updateTreeWithHistory])
+  }, [selectedIds, svgTree, updateTreeWithHistory])
 
   const updateText = useCallback((value: string) => {
-    if (!selectedId || !svgTree) return
-    const next = updateNode(svgTree, selectedId, (node) => {
+    if (selectedIds.size === 0 || !svgTree) return
+    const next = updateMultipleNodes(svgTree, selectedIds, (node) => {
       if (node.tag === '#text') {
         node.text = value
       } else {
@@ -446,28 +734,33 @@ function App() {
       }
     })
     updateTreeWithHistory(next)
-  }, [selectedId, svgTree, updateTreeWithHistory])
+  }, [selectedIds, svgTree, updateTreeWithHistory])
 
   const handlePointerMove = useCallback(
     (e: React.MouseEvent) => {
-      if (!dragState || !svgTree) return
-      const dx = (e.clientX - dragState.startX) / zoom
-      const dy = (e.clientY - dragState.startY) / zoom
-      const transform = `${dragState.baseTransform ? `${dragState.baseTransform} ` : ''}translate(${dx} ${dy})`
-      const next = updateNode(svgTree, dragState.id, (node) => {
-        node.attrs.transform = transform
+      if (!dragState) return
+      // Use functional update to get latest tree state
+      setSvgTree((currentTree) => {
+        if (!currentTree) return currentTree
+        const dx = (e.clientX - dragState.startX) / zoom
+        const dy = (e.clientY - dragState.startY) / zoom
+        const transform = `${dragState.baseTransform ? `${dragState.baseTransform} ` : ''}translate(${dx} ${dy})`
+        const next = updateNode(currentTree, dragState.id, (node) => {
+          node.attrs.transform = transform
+        })
+        latestTreeRef.current = next
+        return next
       })
-      setSvgTree(next)
     },
-    [dragState, svgTree, zoom],
+    [dragState, zoom],
   )
 
   const handlePointerUp = useCallback(() => {
-    if (dragState && svgTree) {
-      updateTreeWithHistory(svgTree)
+    if (dragState && latestTreeRef.current) {
+      updateTreeWithHistory(latestTreeRef.current)
       setDragState(null)
     }
-  }, [dragState, svgTree, updateTreeWithHistory])
+  }, [dragState, updateTreeWithHistory])
 
   const exportSvg = () => {
     if (!svgTree) return ''
@@ -516,50 +809,49 @@ function App() {
   )
 
   const deleteSelected = useCallback(() => {
-    if (!selectedId || !svgTree) return
-    if (selectedId === svgTree.id) {
-      // Can't delete root SVG
-      return
-    }
-    const next = removeNode(svgTree, selectedId)
+    if (selectedIds.size === 0 || !svgTree) return
+    // Can't delete root SVG
+    const idsToDelete = new Set(Array.from(selectedIds).filter((id) => id !== svgTree.id))
+    if (idsToDelete.size === 0) return
+    const next = removeMultipleNodes(svgTree, idsToDelete)
     if (next) {
       updateTreeWithHistory(next)
-      setSelectedId(svgTree.id) // Select root after deletion
+      setSelectedIds(new Set([svgTree.id])) // Select root after deletion
     }
-  }, [selectedId, svgTree, updateTreeWithHistory])
+  }, [selectedIds, svgTree, updateTreeWithHistory])
 
   const duplicateSelected = useCallback(() => {
-    if (!selectedId || !svgTree) return
-    if (selectedId === svgTree.id) {
+    if (selectedIds.size === 0 || !svgTree) return
+    // For multi-select, duplicate the first selected item (can be enhanced later)
+    const firstId = Array.from(selectedIds)[0]
+    if (firstId === svgTree.id) {
       // Can't duplicate root SVG
       return
     }
-    const parent = findParent(svgTree, selectedId)
+    const parent = findParent(svgTree, firstId)
     if (!parent) return
-    const nodeToDuplicate = findNode(svgTree, selectedId)
+    const nodeToDuplicate = findNode(svgTree, firstId)
     if (!nodeToDuplicate) return
-    const duplicated = assignNewIds(cloneNode(nodeToDuplicate), selectedId)
+    const duplicated = assignNewIds(cloneNode(nodeToDuplicate), firstId)
     const next = updateNode(svgTree, parent.id, (p) => {
       p.children.push(duplicated)
     })
     updateTreeWithHistory(next)
-    setSelectedId(duplicated.id)
-  }, [selectedId, svgTree, updateTreeWithHistory])
+    setSelectedIds(new Set([duplicated.id]))
+  }, [selectedIds, svgTree, updateTreeWithHistory])
 
   const updateOpacity = useCallback((value: string) => {
-    if (!selectedId || !svgTree) return
+    if (selectedIds.size === 0 || !svgTree) return
     updateAttribute('opacity', value)
     setOpacity(value)
-  }, [selectedId, svgTree, updateAttribute])
+  }, [selectedIds, svgTree, updateAttribute])
 
   const updateRotation = useCallback((angle: number) => {
-    if (!selectedId || !svgTree) return
-    const node = findNode(svgTree, selectedId)
-    if (!node) return
-    const transform = node.attrs.transform || ''
-    const parsed = parseTransform(transform)
-    const newTransform = buildTransform(parsed.translate, angle)
-    const next = updateNode(svgTree, selectedId, (n) => {
+    if (selectedIds.size === 0 || !svgTree) return
+    const next = updateMultipleNodes(svgTree, selectedIds, (n) => {
+      const transform = n.attrs.transform || ''
+      const parsed = parseTransform(transform)
+      const newTransform = buildTransform(parsed.translate, angle)
       if (newTransform) {
         n.attrs.transform = newTransform
       } else {
@@ -568,14 +860,16 @@ function App() {
     })
     updateTreeWithHistory(next)
     setRotation(angle)
-  }, [selectedId, svgTree, updateTreeWithHistory])
+  }, [selectedIds, svgTree, updateTreeWithHistory])
 
   const groupSelected = useCallback(() => {
-    if (!selectedId || !svgTree) return
-    if (selectedId === svgTree.id) return
-    const node = findNode(svgTree, selectedId)
+    if (selectedIds.size === 0 || !svgTree) return
+    // For multi-select, group the first selected item only (can be enhanced to group multiple)
+    const firstId = Array.from(selectedIds)[0]
+    if (firstId === svgTree.id) return
+    const node = findNode(svgTree, firstId)
     if (!node) return
-    const parent = findParent(svgTree, selectedId)
+    const parent = findParent(svgTree, firstId)
     if (!parent) return
 
     // Create a group element with unique ID
@@ -589,34 +883,35 @@ function App() {
 
     // Replace node with group containing the node
     const next = updateNode(svgTree, parent.id, (p) => {
-      const index = p.children.findIndex((c) => c.id === selectedId)
+      const index = p.children.findIndex((c) => c.id === firstId)
       if (index >= 0) {
         p.children[index] = newGroup
       }
     })
     updateTreeWithHistory(next)
-    setSelectedId(newGroup.id)
-  }, [selectedId, svgTree, updateTreeWithHistory])
+    setSelectedIds(new Set([newGroup.id]))
+  }, [selectedIds, svgTree, updateTreeWithHistory])
 
   const ungroupSelected = useCallback(() => {
-    if (!selectedId || !svgTree) return
-    const node = findNode(svgTree, selectedId)
+    if (selectedIds.size === 0 || !svgTree) return
+    const firstId = Array.from(selectedIds)[0]
+    const node = findNode(svgTree, firstId)
     if (!node || node.tag !== 'g') return
-    const parent = findParent(svgTree, selectedId)
+    const parent = findParent(svgTree, firstId)
     if (!parent) return
 
     // Replace group with its children
     const next = updateNode(svgTree, parent.id, (p) => {
-      const index = p.children.findIndex((c) => c.id === selectedId)
+      const index = p.children.findIndex((c) => c.id === firstId)
       if (index >= 0 && node.children.length > 0) {
         p.children.splice(index, 1, ...node.children.map(cloneNode))
       }
     })
     updateTreeWithHistory(next)
     if (node.children.length > 0) {
-      setSelectedId(node.children[0].id)
+      setSelectedIds(new Set([node.children[0].id]))
     }
-  }, [selectedId, svgTree, updateTreeWithHistory])
+  }, [selectedIds, svgTree, updateTreeWithHistory])
 
   const exportToPng = useCallback(async () => {
     if (!svgTree) return
@@ -788,15 +1083,23 @@ function App() {
                     +
                   </button>
                 </div>
-                {error ? (
-                  <span className="text-xs font-medium text-rose-600">{error}</span>
-                ) : selectedNode ? (
-                  <span className="text-xs text-slate-500">
-                    Selected: <strong className="text-slate-700">{selectedNode.tag}</strong>
-                  </span>
-                ) : (
-                  <span className="text-xs text-slate-400">No selection</span>
-                )}
+              {error ? (
+                <span className="text-xs font-medium text-rose-600">{error}</span>
+                ) : selectedIds.size > 0 ? (
+                <span className="text-xs text-slate-500">
+                    {selectedIds.size === 1 ? (
+                      <>
+                        Selected: <strong className="text-slate-700">{selectedNodes[0]?.tag}</strong>
+                      </>
+                    ) : (
+                      <>
+                        <strong className="text-slate-700">{selectedIds.size} elements</strong> selected
+                      </>
+                    )}
+                </span>
+              ) : (
+                <span className="text-xs text-slate-400">No selection</span>
+              )}
               </div>
             </div>
             <div className="mt-3 flex gap-2">
@@ -820,7 +1123,7 @@ function App() {
               </label>
             </div>
             <div
-              className="mt-3 overflow-auto rounded-xl border border-slate-200 bg-white p-4"
+              className="mt-3 overflow-auto rounded-xl border border-slate-200 bg-white p-4 relative"
               onMouseMove={handlePointerMove}
               onMouseUp={handlePointerUp}
               onMouseLeave={handlePointerUp}
@@ -834,12 +1137,15 @@ function App() {
               }}
             >
               {svgTree ? (
-                <div
-                  className="flex justify-center transition-transform duration-200 ease-in-out"
-                  style={{ transform: `scale(${zoom})`, transformOrigin: 'center' }}
-                >
+                <>
+                  <div
+                    className="flex justify-center transition-transform duration-200 ease-in-out"
+                    style={{ transform: `scale(${zoom})`, transformOrigin: 'center' }}
+                  >
                   {renderNode(svgTree)}
                 </div>
+                  {selectedIds.size > 0 && <SelectionOverlay />}
+                </>
               ) : (
                 <div className="flex h-72 flex-col items-center justify-center text-slate-500">
                   <p className="text-sm">Upload or paste an SVG to start editing.</p>
@@ -883,7 +1189,7 @@ function App() {
                     color={fillColor}
                     onChange={(color) => {
                       setFillColor(color)
-                      updateAttribute('fill', color)
+                      updateAttributeWithoutHistory('fill', color)
                     }}
                   />
                 </div>
@@ -899,7 +1205,7 @@ function App() {
                     color={strokeColor}
                     onChange={(color) => {
                       setStrokeColor(color)
-                      updateAttribute('stroke', color)
+                      updateAttributeWithoutHistory('stroke', color)
                     }}
                   />
                 </div>
@@ -995,7 +1301,7 @@ function App() {
                   <button
                     className="rounded-md bg-slate-900 px-2 py-1 text-xs font-semibold text-white shadow-sm transition hover:bg-slate-800 disabled:opacity-50"
                     onClick={() => updateAttribute(attrKey, attrValue)}
-                    disabled={!selectedId || !attrKey}
+                    disabled={selectedIds.size === 0 || !attrKey}
                   >
                     Apply
                   </button>
@@ -1052,7 +1358,7 @@ function App() {
                 <button
                   className="rounded-md bg-rose-600 px-3 py-2 text-sm font-medium text-white shadow-sm transition hover:bg-rose-700 disabled:cursor-not-allowed disabled:opacity-50"
                   onClick={deleteSelected}
-                  disabled={!selectedId || selectedId === svgTree?.id}
+                  disabled={selectedIds.size === 0 || (svgTree ? selectedIds.has(svgTree.id) : false)}
                   title="Delete (Delete/Backspace)"
                 >
                   🗑️ Delete
@@ -1060,7 +1366,7 @@ function App() {
                 <button
                   className="rounded-md bg-sky-600 px-3 py-2 text-sm font-medium text-white shadow-sm transition hover:bg-sky-700 disabled:cursor-not-allowed disabled:opacity-50"
                   onClick={duplicateSelected}
-                  disabled={!selectedId || selectedId === svgTree?.id}
+                  disabled={selectedIds.size === 0 || (svgTree ? selectedIds.has(svgTree.id) : false)}
                   title="Duplicate (Cmd/Ctrl+D)"
                 >
                   📋 Duplicate
@@ -1068,7 +1374,7 @@ function App() {
                 <button
                   className="rounded-md bg-emerald-600 px-3 py-2 text-sm font-medium text-white shadow-sm transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
                   onClick={groupSelected}
-                  disabled={!selectedId || selectedId === svgTree?.id}
+                  disabled={selectedIds.size === 0 || (svgTree ? selectedIds.has(svgTree.id) : false)}
                   title="Group (Cmd/Ctrl+G)"
                 >
                   📦 Group
@@ -1076,7 +1382,7 @@ function App() {
                 <button
                   className="rounded-md bg-amber-600 px-3 py-2 text-sm font-medium text-white shadow-sm transition hover:bg-amber-700 disabled:cursor-not-allowed disabled:opacity-50"
                   onClick={ungroupSelected}
-                  disabled={!selectedId || !selectedNode || selectedNode.tag !== 'g'}
+                  disabled={selectedIds.size === 0 || selectedNodes.length === 0 || selectedNodes[0]?.tag !== 'g'}
                   title="Ungroup (Cmd/Ctrl+Shift+G)"
                 >
                   📦 Ungroup
@@ -1122,10 +1428,22 @@ function App() {
             <div className="max-h-[60vh] overflow-auto rounded-lg border border-slate-200 p-4">
               <TreeNode
                 node={svgTree}
-                selectedId={selectedId}
-                onSelect={(id) => {
-                  setSelectedId(id)
-                  setShowTreeView(false)
+                selectedIds={selectedIds}
+                onSelect={(id, multi) => {
+                  if (multi) {
+                    setSelectedIds((prev) => {
+                      const next = new Set(prev)
+                      if (next.has(id)) {
+                        next.delete(id)
+                      } else {
+                        next.add(id)
+                      }
+                      return next
+                    })
+                  } else {
+                    setSelectedIds(new Set([id]))
+                    setShowTreeView(false)
+                  }
                 }}
                 level={0}
               />
@@ -1150,7 +1468,9 @@ function App() {
             <div className="space-y-3">
               <ShortcutRow keys={['Cmd/Ctrl', 'Z']} action="Undo" />
               <ShortcutRow keys={['Cmd/Ctrl', 'Shift', 'Z']} action="Redo" />
-              <ShortcutRow keys={['Delete']} action="Delete element" />
+              <ShortcutRow keys={['Cmd/Ctrl', 'Click']} action="Toggle multi-select (add/remove)" />
+              <ShortcutRow keys={['Shift', 'Click']} action="Add to selection" />
+              <ShortcutRow keys={['Delete']} action="Delete selected element(s)" />
               <ShortcutRow keys={['Cmd/Ctrl', 'D']} action="Duplicate element" />
               <ShortcutRow keys={['Cmd/Ctrl', 'G']} action="Group elements" />
               <ShortcutRow keys={['Cmd/Ctrl', 'Shift', 'G']} action="Ungroup elements" />
@@ -1164,20 +1484,20 @@ function App() {
   )
 }
 
-const TreeNode = ({ node, selectedId, onSelect, level }: { node: SvgNode; selectedId: string | null; onSelect: (id: string) => void; level: number }) => {
-  const isSelected = node.id === selectedId
+const TreeNode = ({ node, selectedIds, onSelect, level }: { node: SvgNode; selectedIds: Set<string>; onSelect: (id: string, multi: boolean) => void; level: number }) => {
+  const isSelected = selectedIds.has(node.id)
   return (
     <div className="select-none">
       <div
         className={`flex items-center gap-2 rounded px-2 py-1 hover:bg-slate-100 ${isSelected ? 'bg-sky-100 font-semibold' : ''}`}
         style={{ paddingLeft: `${level * 1.5 + 0.5}rem` }}
-        onClick={() => onSelect(node.id)}
+        onClick={(e) => onSelect(node.id, e.ctrlKey || e.metaKey)}
       >
         <span className="text-xs text-slate-400">{node.tag}</span>
         <span className="text-xs text-slate-500">{node.id}</span>
       </div>
       {node.children.filter((c) => c.tag !== '#text').map((child) => (
-        <TreeNode key={child.id} node={child} selectedId={selectedId} onSelect={onSelect} level={level + 1} />
+        <TreeNode key={child.id} node={child} selectedIds={selectedIds} onSelect={onSelect} level={level + 1} />
       ))}
     </div>
   )
