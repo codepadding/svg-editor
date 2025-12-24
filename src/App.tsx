@@ -152,6 +152,69 @@ const getAttrOrStyle = (node: SvgNode | null, key: string): string | undefined =
   return node.attrs[key] ?? getStyleValue(node.attrs.style, key)
 }
 
+const findParent = (node: SvgNode, targetId: string, parent: SvgNode | null = null): SvgNode | null => {
+  if (node.id === targetId) return parent
+  for (const child of node.children) {
+    const found = findParent(child, targetId, node)
+    if (found !== null) return found
+  }
+  return null
+}
+
+const removeNode = (node: SvgNode, id: string): SvgNode | null => {
+  if (node.id === id) return null
+  const next = cloneNode(node)
+  next.children = next.children.filter((child) => child.id !== id).map((child) => removeNode(child, id)!)
+  return next
+}
+
+const assignNewIds = (node: SvgNode, baseId: string): SvgNode => {
+  let counter = 0
+  const newId = `${baseId}-copy${counter > 0 ? `-${counter}` : ''}`
+  counter++
+  const assignIds = (n: SvgNode): SvgNode => {
+    const childId = n.id === baseId ? newId : `${n.id}-copy`
+    return {
+      ...n,
+      id: childId,
+      attrs: { ...n.attrs, 'data-id': childId },
+      children: n.children.map(assignIds),
+    }
+  }
+  return assignIds(node)
+}
+
+const parseTransform = (transform: string): { translate?: { x: number; y: number }; rotate?: number } => {
+  const result: { translate?: { x: number; y: number }; rotate?: number } = {}
+  const translateMatch = transform.match(/translate\(([^)]+)\)/)
+  if (translateMatch) {
+    const [x, y] = translateMatch[1].split(/[,\s]+/).map(Number)
+    result.translate = { x: x || 0, y: y || 0 }
+  }
+  const rotateMatch = transform.match(/rotate\(([^)]+)\)/)
+  if (rotateMatch) {
+    result.rotate = Number(rotateMatch[1]) || 0
+  }
+  return result
+}
+
+const buildTransform = (translate?: { x: number; y: number }, rotate?: number): string => {
+  const parts: string[] = []
+  if (translate) parts.push(`translate(${translate.x} ${translate.y})`)
+  if (rotate !== undefined) parts.push(`rotate(${rotate})`)
+  return parts.join(' ')
+}
+
+const getAllNodes = (node: SvgNode): SvgNode[] => {
+  const result = [node]
+  for (const child of node.children) {
+    if (child.tag !== '#text') {
+      result.push(...getAllNodes(child))
+    }
+  }
+  return result
+}
+
 function App() {
   const [rawSvg, setRawSvg] = useState('')
   const [svgTree, setSvgTree] = useState<SvgNode | null>(null)
@@ -167,6 +230,8 @@ function App() {
   const [strokeOpacity, setStrokeOpacity] = useState('1')
   const [strokeLinecap, setStrokeLinecap] = useState('round')
   const [strokeLinejoin, setStrokeLinejoin] = useState('round')
+  const [opacity, setOpacity] = useState('1')
+  const [rotation, setRotation] = useState(0)
   const [dragState, setDragState] = useState<{
     id: string
     startX: number
@@ -174,8 +239,45 @@ function App() {
     baseTransform: string
   } | null>(null)
   const [zoom, setZoom] = useState(1)
+  const [showGrid, setShowGrid] = useState(false)
+  const [canvasBg, setCanvasBg] = useState('#ffffff')
+  const [history, setHistory] = useState<SvgNode[]>([])
+  const [historyIndex, setHistoryIndex] = useState(-1)
+  const [showShortcuts, setShowShortcuts] = useState(false)
+  const [showTreeView, setShowTreeView] = useState(false)
 
   const selectedNode = useMemo(() => findNode(svgTree, selectedId), [svgTree, selectedId])
+
+  // History management
+  const saveToHistory = useCallback((tree: SvgNode | null) => {
+    if (!tree) return
+    const newHistory = history.slice(0, historyIndex + 1)
+    newHistory.push(cloneNode(tree))
+    setHistory(newHistory)
+    setHistoryIndex(newHistory.length - 1)
+  }, [history, historyIndex])
+
+  const updateTreeWithHistory = useCallback((newTree: SvgNode | null) => {
+    if (!newTree) return
+    saveToHistory(newTree)
+    setSvgTree(newTree)
+  }, [saveToHistory])
+
+  const undo = useCallback(() => {
+    if (historyIndex > 0) {
+      const newIndex = historyIndex - 1
+      setHistoryIndex(newIndex)
+      setSvgTree(cloneNode(history[newIndex]))
+    }
+  }, [history, historyIndex])
+
+  const redo = useCallback(() => {
+    if (historyIndex < history.length - 1) {
+      const newIndex = historyIndex + 1
+      setHistoryIndex(newIndex)
+      setSvgTree(cloneNode(history[newIndex]))
+    }
+  }, [history, historyIndex])
 
   useEffect(() => {
     // Only sync when selection ID changes, not when tree updates
@@ -188,6 +290,8 @@ function App() {
       setStrokeOpacity('1')
       setStrokeLinecap('round')
       setStrokeLinejoin('round')
+      setOpacity('1')
+      setRotation(0)
       setTextValue('')
       return
     }
@@ -206,14 +310,25 @@ function App() {
       const dash = getAttrOrStyle(node, 'stroke-dasharray')
       setStrokeDash(dash || '')
 
-      const opacity = getAttrOrStyle(node, 'stroke-opacity')
-      setStrokeOpacity(opacity || '1')
+      const strokeOpacityValue = getAttrOrStyle(node, 'stroke-opacity')
+      setStrokeOpacity(strokeOpacityValue || '1')
 
       const linecap = getAttrOrStyle(node, 'stroke-linecap')
       setStrokeLinecap(linecap || 'round')
 
       const linejoin = getAttrOrStyle(node, 'stroke-linejoin')
       setStrokeLinejoin(linejoin || 'round')
+
+      const opacityValue = getAttrOrStyle(node, 'opacity')
+      setOpacity(opacityValue || '1')
+
+      const transform = node.attrs.transform || ''
+      const parsed = parseTransform(transform)
+      if (parsed.rotate !== undefined) {
+        setRotation(parsed.rotate)
+      } else {
+        setRotation(0)
+      }
 
       const text = getFirstText(node)
       if (text !== undefined) {
@@ -232,9 +347,14 @@ function App() {
       setError('No <svg> tag found. Paste a valid SVG.')
       setSvgTree(null)
       setSelectedId(null)
+      setHistory([])
+      setHistoryIndex(-1)
       return
     }
     setError(null)
+    const initialHistory = [cloneNode(tree)]
+    setHistory(initialHistory)
+    setHistoryIndex(0)
     setSvgTree(tree)
     setRawSvg(clean)
     setSelectedId(tree.id)
@@ -300,7 +420,7 @@ function App() {
     return React.createElement(tag, mergedAttrs, children.map(renderNode))
   }
 
-  const updateAttribute = (key: string, value: string) => {
+  const updateAttribute = useCallback((key: string, value: string) => {
     if (!selectedId || !svgTree) return
     const next = updateNode(svgTree, selectedId, (node) => {
       if (key === 'fill' || key === 'stroke') {
@@ -311,10 +431,10 @@ function App() {
       if (value) node.attrs[key] = value
       else delete node.attrs[key]
     })
-    setSvgTree(next)
-  }
+    updateTreeWithHistory(next)
+  }, [selectedId, svgTree, updateTreeWithHistory])
 
-  const updateText = (value: string) => {
+  const updateText = useCallback((value: string) => {
     if (!selectedId || !svgTree) return
     const next = updateNode(svgTree, selectedId, (node) => {
       if (node.tag === '#text') {
@@ -325,30 +445,29 @@ function App() {
         )
       }
     })
-    setSvgTree(next)
-  }
+    updateTreeWithHistory(next)
+  }, [selectedId, svgTree, updateTreeWithHistory])
 
   const handlePointerMove = useCallback(
     (e: React.MouseEvent) => {
-      if (!dragState) return
-      setSvgTree((prev) => {
-        if (!prev) return prev
-        const dx = e.clientX - dragState.startX
-        const dy = e.clientY - dragState.startY
-        const transform = `${dragState.baseTransform ? `${dragState.baseTransform} ` : ''}translate(${dx} ${dy})`
-        return updateNode(prev, dragState.id, (node) => {
-          node.attrs.transform = transform
-        })
+      if (!dragState || !svgTree) return
+      const dx = (e.clientX - dragState.startX) / zoom
+      const dy = (e.clientY - dragState.startY) / zoom
+      const transform = `${dragState.baseTransform ? `${dragState.baseTransform} ` : ''}translate(${dx} ${dy})`
+      const next = updateNode(svgTree, dragState.id, (node) => {
+        node.attrs.transform = transform
       })
+      setSvgTree(next)
     },
-    [dragState],
+    [dragState, svgTree, zoom],
   )
 
   const handlePointerUp = useCallback(() => {
-    if (dragState) {
+    if (dragState && svgTree) {
+      updateTreeWithHistory(svgTree)
       setDragState(null)
     }
-  }, [dragState])
+  }, [dragState, svgTree, updateTreeWithHistory])
 
   const exportSvg = () => {
     if (!svgTree) return ''
@@ -396,6 +515,182 @@ function App() {
     [],
   )
 
+  const deleteSelected = useCallback(() => {
+    if (!selectedId || !svgTree) return
+    if (selectedId === svgTree.id) {
+      // Can't delete root SVG
+      return
+    }
+    const next = removeNode(svgTree, selectedId)
+    if (next) {
+      updateTreeWithHistory(next)
+      setSelectedId(svgTree.id) // Select root after deletion
+    }
+  }, [selectedId, svgTree, updateTreeWithHistory])
+
+  const duplicateSelected = useCallback(() => {
+    if (!selectedId || !svgTree) return
+    if (selectedId === svgTree.id) {
+      // Can't duplicate root SVG
+      return
+    }
+    const parent = findParent(svgTree, selectedId)
+    if (!parent) return
+    const nodeToDuplicate = findNode(svgTree, selectedId)
+    if (!nodeToDuplicate) return
+    const duplicated = assignNewIds(cloneNode(nodeToDuplicate), selectedId)
+    const next = updateNode(svgTree, parent.id, (p) => {
+      p.children.push(duplicated)
+    })
+    updateTreeWithHistory(next)
+    setSelectedId(duplicated.id)
+  }, [selectedId, svgTree, updateTreeWithHistory])
+
+  const updateOpacity = useCallback((value: string) => {
+    if (!selectedId || !svgTree) return
+    updateAttribute('opacity', value)
+    setOpacity(value)
+  }, [selectedId, svgTree, updateAttribute])
+
+  const updateRotation = useCallback((angle: number) => {
+    if (!selectedId || !svgTree) return
+    const node = findNode(svgTree, selectedId)
+    if (!node) return
+    const transform = node.attrs.transform || ''
+    const parsed = parseTransform(transform)
+    const newTransform = buildTransform(parsed.translate, angle)
+    const next = updateNode(svgTree, selectedId, (n) => {
+      if (newTransform) {
+        n.attrs.transform = newTransform
+      } else {
+        delete n.attrs.transform
+      }
+    })
+    updateTreeWithHistory(next)
+    setRotation(angle)
+  }, [selectedId, svgTree, updateTreeWithHistory])
+
+  const groupSelected = useCallback(() => {
+    if (!selectedId || !svgTree) return
+    if (selectedId === svgTree.id) return
+    const node = findNode(svgTree, selectedId)
+    if (!node) return
+    const parent = findParent(svgTree, selectedId)
+    if (!parent) return
+
+    // Create a group element with unique ID
+    const timestamp = Date.now()
+    const newGroup: SvgNode = {
+      id: `group-${timestamp}`,
+      tag: 'g',
+      attrs: { 'data-id': `group-${timestamp}` },
+      children: [cloneNode(node)],
+    }
+
+    // Replace node with group containing the node
+    const next = updateNode(svgTree, parent.id, (p) => {
+      const index = p.children.findIndex((c) => c.id === selectedId)
+      if (index >= 0) {
+        p.children[index] = newGroup
+      }
+    })
+    updateTreeWithHistory(next)
+    setSelectedId(newGroup.id)
+  }, [selectedId, svgTree, updateTreeWithHistory])
+
+  const ungroupSelected = useCallback(() => {
+    if (!selectedId || !svgTree) return
+    const node = findNode(svgTree, selectedId)
+    if (!node || node.tag !== 'g') return
+    const parent = findParent(svgTree, selectedId)
+    if (!parent) return
+
+    // Replace group with its children
+    const next = updateNode(svgTree, parent.id, (p) => {
+      const index = p.children.findIndex((c) => c.id === selectedId)
+      if (index >= 0 && node.children.length > 0) {
+        p.children.splice(index, 1, ...node.children.map(cloneNode))
+      }
+    })
+    updateTreeWithHistory(next)
+    if (node.children.length > 0) {
+      setSelectedId(node.children[0].id)
+    }
+  }, [selectedId, svgTree, updateTreeWithHistory])
+
+  const exportToPng = useCallback(async () => {
+    if (!svgTree) return
+    const svgString = exportSvg()
+    if (!svgString) return
+
+    const svgBlob = new Blob([svgString], { type: 'image/svg+xml;charset=utf-8' })
+    const url = URL.createObjectURL(svgBlob)
+    const img = new Image()
+    img.onload = () => {
+      const canvas = document.createElement('canvas')
+      // Use natural dimensions or fallback to reasonable defaults
+      canvas.width = img.naturalWidth || 800
+      canvas.height = img.naturalHeight || 600
+      const ctx = canvas.getContext('2d')
+      if (ctx) {
+        ctx.fillStyle = canvasBg
+        ctx.fillRect(0, 0, canvas.width, canvas.height)
+        ctx.drawImage(img, 0, 0)
+        canvas.toBlob((blob) => {
+          if (blob) {
+            const pngUrl = URL.createObjectURL(blob)
+            const link = document.createElement('a')
+            link.href = pngUrl
+            link.download = 'export.png'
+            link.click()
+            URL.revokeObjectURL(pngUrl)
+          }
+        })
+      }
+      URL.revokeObjectURL(url)
+    }
+    img.onerror = () => {
+      URL.revokeObjectURL(url)
+      setError('Failed to export PNG')
+    }
+    img.src = url
+  }, [svgTree, canvasBg])
+
+  // Keyboard shortcuts
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.target as HTMLElement).tagName === 'INPUT' || (e.target as HTMLElement).tagName === 'TEXTAREA') {
+        return
+      }
+
+      if ((e.metaKey || e.ctrlKey) && e.key === 'z' && !e.shiftKey) {
+        e.preventDefault()
+        undo()
+      } else if ((e.metaKey || e.ctrlKey) && (e.key === 'y' || (e.key === 'z' && e.shiftKey))) {
+        e.preventDefault()
+        redo()
+      } else if (e.key === 'Delete' || e.key === 'Backspace') {
+        e.preventDefault()
+        deleteSelected()
+      } else if ((e.metaKey || e.ctrlKey) && e.key === 'd') {
+        e.preventDefault()
+        duplicateSelected()
+      } else if ((e.metaKey || e.ctrlKey) && e.key === 'g' && !e.shiftKey) {
+        e.preventDefault()
+        groupSelected()
+      } else if ((e.metaKey || e.ctrlKey) && e.key === 'g' && e.shiftKey) {
+        e.preventDefault()
+        ungroupSelected()
+      } else if (e.key === '?') {
+        e.preventDefault()
+        setShowShortcuts((prev) => !prev)
+      }
+    }
+
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [undo, redo, deleteSelected, duplicateSelected, groupSelected, ungroupSelected])
+
   return (
     <div className="min-h-screen">
       <div className="mx-auto max-w-7xl px-6 py-8">
@@ -407,9 +702,40 @@ function App() {
               Upload or paste an SVG, then tweak colors, text, and attributes live.
             </p>
           </div>
-          <div className="flex gap-3">
+          <div className="flex gap-2">
             <button
-              className="rounded-lg bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm ring-1 ring-slate-200 transition hover:shadow"
+              className="rounded-lg bg-white px-3 py-2 text-sm font-medium text-slate-700 shadow-sm ring-1 ring-slate-200 transition hover:shadow disabled:opacity-50"
+              onClick={undo}
+              disabled={historyIndex <= 0 || !svgTree}
+              title="Undo (Cmd/Ctrl+Z)"
+            >
+              ↶ Undo
+            </button>
+            <button
+              className="rounded-lg bg-white px-3 py-2 text-sm font-medium text-slate-700 shadow-sm ring-1 ring-slate-200 transition hover:shadow disabled:opacity-50"
+              onClick={redo}
+              disabled={historyIndex >= history.length - 1 || !svgTree}
+              title="Redo (Cmd/Ctrl+Shift+Z)"
+            >
+              ↷ Redo
+            </button>
+            <button
+              className="rounded-lg bg-white px-3 py-2 text-sm font-medium text-slate-700 shadow-sm ring-1 ring-slate-200 transition hover:shadow disabled:opacity-50"
+              onClick={() => setShowTreeView(!showTreeView)}
+              disabled={!svgTree}
+              title="Element Tree"
+            >
+              🌳 Tree
+            </button>
+            <button
+              className="rounded-lg bg-white px-3 py-2 text-sm font-medium text-slate-700 shadow-sm ring-1 ring-slate-200 transition hover:shadow"
+              onClick={() => setShowShortcuts(!showShortcuts)}
+              title="Keyboard Shortcuts (?)"
+            >
+              ⌨️ Shortcuts
+            </button>
+            <button
+              className="rounded-lg bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm ring-1 ring-slate-200 transition hover:shadow disabled:opacity-50"
               onClick={copyToClipboard}
               disabled={!svgTree}
             >
@@ -420,7 +746,14 @@ function App() {
               onClick={downloadSvg}
               disabled={!svgTree}
             >
-              Download
+              Download SVG
+            </button>
+            <button
+              className="rounded-lg bg-sky-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-sky-700 disabled:cursor-not-allowed disabled:opacity-60"
+              onClick={exportToPng}
+              disabled={!svgTree}
+            >
+              Export PNG
             </button>
           </div>
         </header>
@@ -466,12 +799,39 @@ function App() {
                 )}
               </div>
             </div>
+            <div className="mt-3 flex gap-2">
+              <label className="flex items-center gap-2 text-xs text-slate-600">
+                <input
+                  type="checkbox"
+                  checked={showGrid}
+                  onChange={(e) => setShowGrid(e.target.checked)}
+                  className="rounded border-slate-300"
+                />
+                Grid
+              </label>
+              <label className="flex items-center gap-2 text-xs text-slate-600">
+                <span>Background:</span>
+                <input
+                  type="color"
+                  value={canvasBg}
+                  onChange={(e) => setCanvasBg(e.target.value)}
+                  className="h-5 w-12 rounded border border-slate-300"
+                />
+              </label>
+            </div>
             <div
               className="mt-3 overflow-auto rounded-xl border border-slate-200 bg-white p-4"
               onMouseMove={handlePointerMove}
               onMouseUp={handlePointerUp}
               onMouseLeave={handlePointerUp}
               onWheel={handleWheel}
+              style={{
+                backgroundImage: showGrid
+                  ? `linear-gradient(${canvasBg} 1px, transparent 1px), linear-gradient(90deg, ${canvasBg} 1px, transparent 1px)`
+                  : 'none',
+                backgroundSize: '20px 20px',
+                backgroundColor: canvasBg,
+              }}
             >
               {svgTree ? (
                 <div
@@ -660,6 +1020,70 @@ function App() {
               />
             </div>
 
+            <div className="grid grid-cols-2 gap-3 rounded-xl border border-slate-200 bg-white p-3">
+              <label className="flex flex-col gap-1">
+                <span className="text-sm font-medium text-slate-700">Opacity</span>
+                <input
+                  type="number"
+                  min="0"
+                  max="1"
+                  step="0.05"
+                  value={opacity}
+                  onChange={(e) => updateOpacity(e.target.value)}
+                  className="rounded-md border border-slate-200 bg-white px-2 py-1 text-sm text-slate-800 outline-none focus:border-sky-400 focus:ring-1 focus:ring-sky-200"
+                />
+              </label>
+              <label className="flex flex-col gap-1">
+                <span className="text-sm font-medium text-slate-700">Rotation (°)</span>
+                <input
+                  type="number"
+                  value={rotation}
+                  onChange={(e) => updateRotation(Number(e.target.value))}
+                  className="rounded-md border border-slate-200 bg-white px-2 py-1 text-sm text-slate-800 outline-none focus:border-sky-400 focus:ring-1 focus:ring-sky-200"
+                />
+              </label>
+            </div>
+
+            <div className="space-y-2 rounded-xl border border-slate-200 bg-white p-3">
+              <div className="flex items-center justify-between">
+                <span className="text-sm font-medium text-slate-700">Element Actions</span>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  className="rounded-md bg-rose-600 px-3 py-2 text-sm font-medium text-white shadow-sm transition hover:bg-rose-700 disabled:cursor-not-allowed disabled:opacity-50"
+                  onClick={deleteSelected}
+                  disabled={!selectedId || selectedId === svgTree?.id}
+                  title="Delete (Delete/Backspace)"
+                >
+                  🗑️ Delete
+                </button>
+                <button
+                  className="rounded-md bg-sky-600 px-3 py-2 text-sm font-medium text-white shadow-sm transition hover:bg-sky-700 disabled:cursor-not-allowed disabled:opacity-50"
+                  onClick={duplicateSelected}
+                  disabled={!selectedId || selectedId === svgTree?.id}
+                  title="Duplicate (Cmd/Ctrl+D)"
+                >
+                  📋 Duplicate
+                </button>
+                <button
+                  className="rounded-md bg-emerald-600 px-3 py-2 text-sm font-medium text-white shadow-sm transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
+                  onClick={groupSelected}
+                  disabled={!selectedId || selectedId === svgTree?.id}
+                  title="Group (Cmd/Ctrl+G)"
+                >
+                  📦 Group
+                </button>
+                <button
+                  className="rounded-md bg-amber-600 px-3 py-2 text-sm font-medium text-white shadow-sm transition hover:bg-amber-700 disabled:cursor-not-allowed disabled:opacity-50"
+                  onClick={ungroupSelected}
+                  disabled={!selectedId || !selectedNode || selectedNode.tag !== 'g'}
+                  title="Ungroup (Cmd/Ctrl+Shift+G)"
+                >
+                  📦 Ungroup
+                </button>
+              </div>
+            </div>
+
             <div className="space-y-2 rounded-xl border border-slate-200 bg-white p-3">
               <div className="flex items-center justify-between">
                 <span className="text-sm font-medium text-slate-700">Export</span>
@@ -680,6 +1104,98 @@ function App() {
             </div>
           </section>
         </div>
+      </div>
+
+      {/* Element Tree View */}
+      {showTreeView && svgTree && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => setShowTreeView(false)}>
+          <div className="max-h-[80vh] w-full max-w-2xl rounded-xl bg-white p-6 shadow-xl" onClick={(e) => e.stopPropagation()}>
+            <div className="mb-4 flex items-center justify-between">
+              <h2 className="text-xl font-semibold text-slate-900">Element Tree</h2>
+              <button
+                onClick={() => setShowTreeView(false)}
+                className="rounded-lg p-2 text-slate-500 hover:bg-slate-100"
+              >
+                ✕
+              </button>
+            </div>
+            <div className="max-h-[60vh] overflow-auto rounded-lg border border-slate-200 p-4">
+              <TreeNode
+                node={svgTree}
+                selectedId={selectedId}
+                onSelect={(id) => {
+                  setSelectedId(id)
+                  setShowTreeView(false)
+                }}
+                level={0}
+              />
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Keyboard Shortcuts Modal */}
+      {showShortcuts && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => setShowShortcuts(false)}>
+          <div className="w-full max-w-lg rounded-xl bg-white p-6 shadow-xl" onClick={(e) => e.stopPropagation()}>
+            <div className="mb-4 flex items-center justify-between">
+              <h2 className="text-xl font-semibold text-slate-900">Keyboard Shortcuts</h2>
+              <button
+                onClick={() => setShowShortcuts(false)}
+                className="rounded-lg p-2 text-slate-500 hover:bg-slate-100"
+              >
+                ✕
+              </button>
+            </div>
+            <div className="space-y-3">
+              <ShortcutRow keys={['Cmd/Ctrl', 'Z']} action="Undo" />
+              <ShortcutRow keys={['Cmd/Ctrl', 'Shift', 'Z']} action="Redo" />
+              <ShortcutRow keys={['Delete']} action="Delete element" />
+              <ShortcutRow keys={['Cmd/Ctrl', 'D']} action="Duplicate element" />
+              <ShortcutRow keys={['Cmd/Ctrl', 'G']} action="Group elements" />
+              <ShortcutRow keys={['Cmd/Ctrl', 'Shift', 'G']} action="Ungroup elements" />
+              <ShortcutRow keys={['?']} action="Show shortcuts" />
+              <ShortcutRow keys={['Cmd/Ctrl', '+', 'Scroll']} action="Zoom in/out" />
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+const TreeNode = ({ node, selectedId, onSelect, level }: { node: SvgNode; selectedId: string | null; onSelect: (id: string) => void; level: number }) => {
+  const isSelected = node.id === selectedId
+  return (
+    <div className="select-none">
+      <div
+        className={`flex items-center gap-2 rounded px-2 py-1 hover:bg-slate-100 ${isSelected ? 'bg-sky-100 font-semibold' : ''}`}
+        style={{ paddingLeft: `${level * 1.5 + 0.5}rem` }}
+        onClick={() => onSelect(node.id)}
+      >
+        <span className="text-xs text-slate-400">{node.tag}</span>
+        <span className="text-xs text-slate-500">{node.id}</span>
+      </div>
+      {node.children.filter((c) => c.tag !== '#text').map((child) => (
+        <TreeNode key={child.id} node={child} selectedId={selectedId} onSelect={onSelect} level={level + 1} />
+      ))}
+    </div>
+  )
+}
+
+const ShortcutRow = ({ keys, action }: { keys: string[]; action: string }) => {
+  return (
+    <div className="flex items-center justify-between rounded-lg border border-slate-200 px-4 py-3">
+      <span className="text-sm text-slate-700">{action}</span>
+      <div className="flex gap-1">
+        {keys.map((key, i) => (
+          <React.Fragment key={i}>
+            <kbd className="rounded bg-slate-100 px-2 py-1 text-xs font-mono font-semibold text-slate-700">
+              {key}
+            </kbd>
+            {i < keys.length - 1 && <span className="text-slate-400">+</span>}
+          </React.Fragment>
+        ))}
       </div>
     </div>
   )
