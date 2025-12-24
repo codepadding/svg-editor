@@ -1,0 +1,16 @@
+.glass {
+  background: rgba(255, 255, 255, 0.75);
+  backdrop-filter: blur(8px);
+  border: 1px solid rgba(148, 163, 184, 0.35);
+}
+
+.scroll-slim::-webkit-scrollbar {
+  width: 10px;
+}
+.scroll-slim::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 9999px;
+}
+.scroll-slim::-webkit-scrollbar-track {
+  background: transparent;
+}
