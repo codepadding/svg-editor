@@ -170,13 +170,6 @@ const findParent = (node: SvgNode, targetId: string, parent: SvgNode | null = nu
   return null
 }
 
-const removeNode = (node: SvgNode, id: string): SvgNode | null => {
-  if (node.id === id) return null
-  const next = cloneNode(node)
-  next.children = next.children.filter((child) => child.id !== id).map((child) => removeNode(child, id)!)
-  return next
-}
-
 const removeMultipleNodes = (node: SvgNode, ids: Set<string>): SvgNode | null => {
   if (ids.has(node.id)) return null
   const next = cloneNode(node)
@@ -221,16 +214,6 @@ const buildTransform = (translate?: { x: number; y: number }, rotate?: number): 
   if (translate) parts.push(`translate(${translate.x} ${translate.y})`)
   if (rotate !== undefined) parts.push(`rotate(${rotate})`)
   return parts.join(' ')
-}
-
-const getAllNodes = (node: SvgNode): SvgNode[] => {
-  const result = [node]
-  for (const child of node.children) {
-    if (child.tag !== '#text') {
-      result.push(...getAllNodes(child))
-    }
-  }
-  return result
 }
 
 function App() {
@@ -504,6 +487,7 @@ function App() {
         : {}),
     }
     // prevent passing style string to React style prop
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     const { style: _ignoredStyle, ...restAttrs } = attrs
     const mergedAttrs = {
       ...restAttrs,
@@ -554,7 +538,7 @@ function App() {
         if (!canvasContainer) return
 
         selectedIds.forEach((id) => {
-          const element = document.querySelector(`[data-id="${id}"]`) as any
+          const element = document.querySelector(`[data-id="${id}"]`) as HTMLElement | SVGElement | null
           if (element && element.tagName !== 'svg') {
             try {
               // Get the element's bounding rect (already includes zoom transform)
@@ -573,7 +557,7 @@ function App() {
               const height = elementRect.height
 
               newBboxes.set(id, new DOMRect(x, y, width, height))
-            } catch (e) {
+            } catch {
               // Ignore errors
             }
           }
@@ -584,6 +568,7 @@ function App() {
       // Small delay to ensure DOM is updated
       const timeout = setTimeout(updateBboxes, 0)
       return () => clearTimeout(timeout)
+      // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [selectedIds, svgTree, zoom])
 
     if (selectedIds.size === 0 || !svgTree) return null
@@ -664,8 +649,10 @@ function App() {
                       .map(Number)
                       .filter((n) => !isNaN(n))
 
-                    const element = document.querySelector(`[data-id="${id}"]`) as any
-                    if (!element) return null
+                    const element = document.querySelector(`[data-id="${id}"]`) as HTMLElement | SVGElement | null
+                    if (!element || !(element instanceof SVGElement)) return null
+
+                    const svgGraphicsElement = element as SVGGraphicsElement
 
                     return (
                       <>
@@ -675,7 +662,7 @@ function App() {
                           const pt = svgEl.createSVGPoint()
                           pt.x = x
                           pt.y = y
-                          const screenCTM = element.getScreenCTM ? element.getScreenCTM() : null
+                          const screenCTM = svgGraphicsElement.getScreenCTM()
                           if (!screenCTM) return null
                           const svgRect = svgEl.getBoundingClientRect()
                           const screenPt = pt.matrixTransform(screenCTM)
@@ -699,7 +686,7 @@ function App() {
                         })}
                       </>
                     )
-                  } catch (e) {
+                  } catch {
                     return null
                   }
                 }
@@ -829,10 +816,10 @@ function App() {
     }
   }, [dragState, updateTreeWithHistory])
 
-  const exportSvg = () => {
+  const exportSvg = useCallback(() => {
     if (!svgTree) return ''
     return serializeNode(svgTree)
-  }
+  }, [svgTree])
 
   const downloadSvg = () => {
     const svgString = exportSvg()
@@ -1048,7 +1035,7 @@ function App() {
       setError('Failed to export PNG')
     }
     img.src = url
-  }, [svgTree, canvasBg])
+  }, [svgTree, canvasBg, exportSvg])
 
   // Keyboard shortcuts
   useEffect(() => {
