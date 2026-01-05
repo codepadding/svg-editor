@@ -1091,7 +1091,7 @@ function App() {
   return (
     <div className="min-h-screen">
       <div className="mx-auto max-w-7xl px-6 py-8">
-        <header className="mb-6 flex flex-wrap items-center justify-between gap-4">
+        <header className="mb-6 flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
           <div>
             <p className="text-xs font-semibold uppercase tracking-wide text-sky-600">SVG studio</p>
             <h1 className="text-3xl font-semibold text-slate-900">Browser SVG Editor</h1>
@@ -1099,7 +1099,8 @@ function App() {
               Upload or paste an SVG, then tweak colors, text, and attributes live.
             </p>
           </div>
-          <div className="flex gap-2">
+          <div className="overflow-x-auto -mx-6 px-6 lg:mx-0 lg:px-0">
+            <div className="flex flex-nowrap gap-2 min-w-max lg:min-w-0">
             <button
               className="rounded-lg bg-white px-3 py-2 text-sm font-medium text-slate-700 shadow-sm ring-1 ring-slate-200 transition hover:shadow disabled:opacity-50"
               onClick={undo}
@@ -1160,6 +1161,7 @@ function App() {
             >
               Export PNG
             </button>
+            </div>
           </div>
         </header>
 
