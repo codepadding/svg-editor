@@ -54,6 +54,7 @@ Open [http://localhost:5173](http://localhost:5173) in your browser.
 - `yarn build` - Build for production
 - `yarn preview` - Preview production build
 - `yarn lint` - Run ESLint
+- `./release.sh` - Create a new release (bumps version, updates changelog, tags, and pushes)
 
 ## How can I contribute?
 

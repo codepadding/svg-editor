@@ -57,6 +57,26 @@ Increment when you make **backward-compatible bug fixes**:
 
 ## Release Process
 
+### Automated Release (Recommended)
+
+Use the release script for automated version bumping and tagging:
+
+```bash
+./release.sh
+```
+
+The script will:
+1. ✅ Check you're on the `main` branch
+2. ✅ Verify no uncommitted changes
+3. ✅ Prompt for new version number
+4. ✅ Update `package.json` version
+5. ✅ Update `CHANGELOG.md` with new version entry
+6. ✅ Commit changes with proper message
+7. ✅ Create git tag (v1.2.3)
+8. ✅ Push to main and push tags
+
+### Manual Release
+
 1. **Update version in `package.json`**
    ```json
    {
@@ -69,9 +89,12 @@ Increment when you make **backward-compatible bug fixes**:
    - Date the release
    - Categorize changes (Added, Changed, Fixed, etc.)
 
-3. **Create Git Tag**
+3. **Commit and Tag**
    ```bash
+   git add package.json CHANGELOG.md
+   git commit -m "chore: Release version 1.2.3"
    git tag -a v1.2.3 -m "Release version 1.2.3"
+   git push origin main
    git push origin v1.2.3
    ```
 
