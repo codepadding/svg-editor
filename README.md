@@ -141,3 +141,12 @@ Want to work on something? Check out our [Contributing Guide](./CONTRIBUTING.md)
 
 This project is open to contributors and collaborators. We welcome your ideas, bug fixes, and improvements! See our [Contributing Guide](./CONTRIBUTING.md) to get started.
 
+## Versioning
+
+This project follows [Semantic Versioning](https://semver.org/) (SemVer).
+
+- **Current Version**: `0.1.0`
+- **Version Format**: `MAJOR.MINOR.PATCH` (e.g., `1.2.3`)
+- See [VERSIONING.md](./VERSIONING.md) for details on our versioning strategy
+- See [CHANGELOG.md](./CHANGELOG.md) for a detailed list of changes
+
