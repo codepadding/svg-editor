@@ -133,3 +133,11 @@ Want to work on something? Check out our [Contributing Guide](./CONTRIBUTING.md)
 
 **Built with** ❤️ **using React, TypeScript, Tailwind CSS, and Vite**
 
+---
+
+## Maintainers
+
+**Maintained by CodePadding.**
+
+This project is open to contributors and collaborators. We welcome your ideas, bug fixes, and improvements! See our [Contributing Guide](./CONTRIBUTING.md) to get started.
+

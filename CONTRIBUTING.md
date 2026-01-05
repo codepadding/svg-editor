@@ -2,6 +2,46 @@
 
 Thank you for your interest in contributing to Browser SVG Editor! This guide will help you get started.
 
+## 🌍 Collaboration Flow
+
+Our collaboration follows a structured workflow to ensure code quality and maintainability:
+
+1. **Fork the Repository**
+   - Click the "Fork" button on GitHub to create your own copy of the repository
+
+2. **Create a Feature Branch**
+   - Create a new branch from `main` with a descriptive name
+   - Use prefixes: `feature/`, `fix/`, `docs/`, `refactor/`
+
+3. **Make Your Changes**
+   - Write clean, tested code
+   - Follow our coding standards
+   - Commit with clear messages
+
+4. **Open a Pull Request**
+   - Push your branch to your fork
+   - Open a PR targeting the `main` branch
+   - Fill out the PR template completely
+
+5. **CI Runs Automatically**
+   - Our GitHub Actions CI will:
+     - Run linting checks
+     - Build the project
+     - Verify TypeScript compilation
+   - **All checks must pass** before merge
+
+6. **Code Review**
+   - At least one maintainer review is required
+   - Address feedback and push updates
+   - Respond to comments promptly
+
+7. **Merge**
+   - PRs are merged using **Squash and Merge** or **Rebase and Merge**
+   - This keeps `main` clean with linear history
+   - Your branch will be deleted after merge
+
+**Important**: The `main` branch is protected and stays stable. All changes go through PRs.
+
 ## Getting Started
 
 1. **Fork the repository**
